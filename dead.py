@@ -107,7 +107,13 @@ def plot_top(df, metric, title, color, n=50):   # default = 50
 # ===========================================================
 # --- Tabs ---
 # ===========================================================
-tab1, tab2, tab3, tab4 = st.tabs(["💰 Sales", "📈 Profit", "📦 Quantity", "⚠️ High Sales, Low Profit"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "💰 Sales", 
+    "📈 Profit", 
+    "📦 Quantity", 
+    "⚠️ High Sales, Low Profit",
+    "💡 Low Sales, High Profit"
+])
 
 # --- Tab 1: Sales ---
 with tab1:
@@ -191,12 +197,51 @@ with tab4:
 
         st.markdown("#### 📄 Dataset (Top 100)")
         st.dataframe(problem_items.head(100)[["Item Code", "Items", "Qty Sold", "Total Sales", "Total Profit", "GP%"]])
-
-        st.markdown("#### 🔎 Insights")
-        st.write(f"- Found **{len(problem_items)} items** with high sales but weak profit.")
-        st.write(f"- Example: **{problem_items.iloc[0]['Items']}** sold **{problem_items.iloc[0]['Qty Sold']:,.0f} units** but only made profit of **{problem_items.iloc[0]['Total Profit']:,.0f}** (GP: {problem_items.iloc[0]['GP%']:.2f}%).")
     else:
         st.info("✅ No items found where sales are high but profit is low based on thresholds.")
+
+# --- Tab 5: Low Sales, High Profit ---
+with tab5:
+    qty_threshold = item_summary["Qty Sold"].quantile(0.25)
+    profit_threshold = item_summary["Total Profit"].quantile(0.75)
+
+    strong_items = item_summary[
+        (item_summary["Qty Sold"] <= qty_threshold) & 
+        (item_summary["Total Profit"] >= profit_threshold)
+    ].sort_values("Total Profit", ascending=False)
+
+    st.subheader("💡 Items with Low Sales but High Profit")
+    if not strong_items.empty:
+        fig_strong = px.bar(
+            strong_items.head(50),
+            x="Total Profit",
+            y="Items",
+            orientation="h",
+            text="Total Profit",
+            color="Qty Sold",
+            color_continuous_scale="Greens",
+            title="Low Sales, High Profit Items",
+            hover_data={
+                "Item Code": True,
+                "Qty Sold": ":,.0f",
+                "Total Sales": ":,.0f",
+                "Total Profit": ":,.0f",
+                "GP%": ":.2f"
+            }
+        )
+        fig_strong.update_traces(texttemplate='%{text:,.0f}', textposition="outside")
+        fig_strong.update_layout(
+            height=1200,
+            yaxis=dict(autorange="reversed"),
+            margin=dict(l=10, r=10, t=40, b=10),
+            coloraxis_showscale=False
+        )
+        st.plotly_chart(fig_strong, use_container_width=True)
+
+        st.markdown("#### 📄 Dataset (Top 100)")
+        st.dataframe(strong_items.head(100)[["Item Code", "Items", "Qty Sold", "Total Sales", "Total Profit", "GP%"]])
+    else:
+        st.info("✅ No items found where sales are low but profit is high based on thresholds.")
 
 st.markdown("---")
 
@@ -209,6 +254,7 @@ with pd.ExcelWriter("Top_Items_Report.xlsx") as writer:
     item_summary.sort_values("Total Sales", ascending=False).head(100).to_excel(writer, sheet_name="Top Sales", index=False)
     item_summary.sort_values("Total Profit", ascending=False).head(100).to_excel(writer, sheet_name="Top Profit", index=False)
     problem_items.head(100).to_excel(writer, sheet_name="High Sales Low Profit", index=False)
+    strong_items.head(100).to_excel(writer, sheet_name="Low Sales High Profit", index=False)
 
 with open("Top_Items_Report.xlsx", "rb") as f:
     st.download_button("⬇️ Download Excel Report", f, file_name="Top_Items_Report.xlsx")
