@@ -2,81 +2,193 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# --- Load Multiple Excel Files ---
-files = ["dead_stock1.xlsx", "dead_stock2.xlsx", "dead_stock3.xlsx"]  # update file names
-dfs = [pd.read_excel(f) for f in files]
-df = pd.concat(dfs, ignore_index=True)
+# --- Authentication Setup ---
+def login():
+    st.title("🔐 Login to Sales Insights Dashboard")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    if st.button("Login"):
+        if username == "almadina" and password == "12345":
+            st.session_state["authenticated"] = True
+            st.success("✅ Login successful! Access granted.")
+            st.rerun()
+        else:
+            st.error("❌ Invalid username or password")
 
-# --- Clean column names ---
-df.columns = df.columns.str.strip()
+# --- Run Login Check ---
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
 
-# --- Ensure numeric fields ---
-for col in ["Stock Value", "Stock", "Profit", "Margin%", "Total Sales", "Cost", "Selling", "LP Price"]:
+if not st.session_state["authenticated"]:
+    login()
+    st.stop()
+
+# ===========================================================
+# --- Dashboard Code (only runs after login) ---
+# ===========================================================
+
+# --- Page Setup ---
+st.set_page_config(page_title="Sales Insights Dashboard", layout="wide")
+st.title("📊SAFA oud mehta AUG&SEP Sales Insights")
+
+# --- Load Data ---
+df = pd.read_excel("sales of oud mehta aug and sep.Xlsx")   # change filename if needed
+
+# --- Ensure numeric columns ---
+numeric_cols = ["Qty Sold", "Total Sales", "Total Profit"]
+for col in numeric_cols:
     if col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-# --- Handle negative stock for plotting ---
-df["Stock_clean"] = df["Stock"].clip(lower=0)
+# --- Add GP% ---
+df["GP%"] = (df["Total Profit"] / df["Total Sales"]) * 100
 
-# --- Dashboard Layout ---
-st.set_page_config(page_title="Dead Stock Dashboard", layout="wide")
-st.title("📊Safa Oud metha Stock(Zero Sales and LP before 2025)")
-
-# --- KPIs at Top ---
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Total Dead Stock Items", f"{len(df):,}")
-col2.metric("Total Stock Qty", f"{df['Stock'].sum():,.0f}")
-col3.metric("Total Stock Value", f"{df['Stock Value'].sum():,.2f}")
-
-# --- High Priority Items (Top 10 by Stock Value) ---
-st.subheader("🚨 High Priority Items (Top 10 by Stock Value)")
-high_priority = df.nlargest(10, "Stock Value")
-priority_cols = [c for c in ["Item Bar Code","Item Name","Stock","Stock Value","Margin%","Profit",
-                             "Cost","Selling","LP Price","LP Date","LP Supplier"] if c in df.columns]
-st.table(high_priority[priority_cols])  # removed gradient to avoid matplotlib dependency
-
-# --- Top Items by Stock Value (Horizontal Bar Chart) ---
-st.subheader("Top 20 Items by Stock Value")
-top_items = df.nlargest(20, "Stock Value")
-fig1 = px.bar(
-    top_items, y="Item Name", x="Stock Value", orientation="h",
-    text="Stock Value", color="Stock Value", color_continuous_scale="Reds",
-    hover_data={
-        "Item Bar Code": True,
-        "Item Name": True,
-        "Stock": True,
-        "Stock Value": True,
-        "Margin%": True,
-        "Profit": True,
-        "Cost": True,
-        "Selling": True,
-        "LP Price": True
-    }
+# --- Aggregate per Item including GP% ---
+item_summary = (
+    df.groupby(["Item Code", "Items"])
+    .agg({
+        "Qty Sold": "sum",
+        "Total Sales": "sum",
+        "Total Profit": "sum"
+    })
+    .reset_index()
 )
-fig1.update_layout(yaxis={'categoryorder':'total ascending'})
-st.plotly_chart(fig1, use_container_width=True)
 
-# --- Pie Chart: Category-wise Stock Value ---
-st.subheader("Stock Value by Category")
-if "Category" in df.columns:
-    category_df = df.groupby("Category")["Stock Value"].sum().reset_index()
-    fig2 = px.pie(
-        category_df, values="Stock Value", names="Category",
-        hover_data={"Stock Value": True},
-        color_discrete_sequence=px.colors.sequential.Reds
+# --- Calculate GP% at item level ---
+item_summary["GP%"] = (item_summary["Total Profit"] / item_summary["Total Sales"]) * 100
+
+# --- Overall KPIs ---
+total_sales = item_summary["Total Sales"].sum()
+total_profit = item_summary["Total Profit"].sum()
+total_qty = item_summary["Qty Sold"].sum()
+
+st.markdown("### 📌 Key Highlights")
+col1, col2, col3 = st.columns(3)
+col1.metric("💰 Total Sales", f"{total_sales:,.0f}")
+col2.metric("📈 Total Profit", f"{total_profit:,.0f}")
+col3.metric("📦 Total Quantity Sold", f"{total_qty:,.0f}")
+
+st.markdown("---")
+
+# --- Function to Plot Top 30 Horizontal Bar ---
+def plot_top(df, metric, title, color):
+    top = df.sort_values(metric, ascending=False).head(30)
+    fig = px.bar(
+        top,
+        x=metric,
+        y="Items",
+        orientation="h",
+        text=metric,
+        color=metric,
+        color_continuous_scale=color,
+        title=title,
+        hover_data={
+            "Item Code": True,
+            "Qty Sold": ":,.0f",
+            "Total Sales": ":,.0f",
+            "Total Profit": ":,.0f",
+            "GP%": ":.2f",
+            metric: False
+        }
     )
-    fig2.update_traces(textinfo="percent+label")
-    st.plotly_chart(fig2, use_container_width=True)
+    fig.update_traces(texttemplate='%{text:,.0f}', textposition="outside")
+    fig.update_layout(
+        height=900,
+        yaxis=dict(autorange="reversed"),
+        margin=dict(l=10, r=10, t=40, b=10),
+        coloraxis_showscale=False
+    )
+    return fig, top
 
+# --- Tabs ---
+tab1, tab2, tab3, tab4 = st.tabs(["💰 Sales", "📈 Profit", "📦 Quantity", "⚠️ High Sales, Low Profit"])
 
+# --- Tab 1: Sales ---
+with tab1:
+    fig_sales, top_sales = plot_top(item_summary, "Total Sales", "Top 30 Items by Sales", "Blues")
+    st.plotly_chart(fig_sales, use_container_width=True)
+    st.markdown("#### 🔎 Insights")
+    st.write(f"- 🏆 **{top_sales.iloc[0]['Items']}** is the highest with **{top_sales.iloc[0]['Total Sales']:,.0f}** sales.")
+    st.write(f"- Top 5 items contribute **{top_sales['Total Sales'].head(5).sum()/total_sales:.1%}** of overall sales.")
+    st.markdown("#### 📄 Dataset")
+    st.dataframe(top_sales[["Item Code", "Items", "Qty Sold", "Total Sales", "Total Profit", "GP%"]])
 
-# --- Detailed Data Table (Full Details) ---
-st.subheader("Detailed Dead Stock Items (Full Details)")
-detailed_cols = [c for c in ["Item Bar Code","Item Name","Item No","Stock","Stock Value","Margin%","Profit",
-                             "Cost","Selling","LP Price","LP Date","LP Supplier","CF","Unit","Category","Pre Return"] 
-                 if c in df.columns]
-st.dataframe(df[detailed_cols])
+# --- Tab 2: Profit ---
+with tab2:
+    fig_profit, top_profit = plot_top(item_summary, "Total Profit", "Top 30 Items by Profit", "Greens")
+    st.plotly_chart(fig_profit, use_container_width=True)
+    st.markdown("#### 🔎 Insights")
+    st.write(f"- 💹 **{top_profit.iloc[0]['Items']}** generated the most profit (**{top_profit.iloc[0]['Total Profit']:,.0f}**).")
+    st.write(f"- Top 5 items account for **{top_profit['Total Profit'].head(5).sum()/total_profit:.1%}** of total profit.")
+    st.markdown("#### 📄 Dataset")
+    st.dataframe(top_profit[["Item Code", "Items", "Qty Sold", "Total Sales", "Total Profit", "GP%"]])
+
+# --- Tab 3: Quantity ---
+with tab3:
+    fig_qty, top_qty = plot_top(item_summary, "Qty Sold", "Top 30 Items by Quantity Sold", "Oranges")
+    st.plotly_chart(fig_qty, use_container_width=True)
+    st.markdown("#### 🔎 Insights")
+    st.write(f"- 📦 **{top_qty.iloc[0]['Items']}** is the most sold item (**{top_qty.iloc[0]['Qty Sold']:,.0f} units**).")
+    st.write(f"- Top 5 items represent **{top_qty['Qty Sold'].head(5).sum()/total_qty:.1%}** of total quantity sold.")
+    st.markdown("#### 📄 Dataset")
+    st.dataframe(top_qty[["Item Code", "Items", "Qty Sold", "Total Sales", "Total Profit", "GP%"]])
+
+# --- Tab 4: High Sales, Low Profit ---
+with tab4:
+    qty_threshold = item_summary["Qty Sold"].quantile(0.75)
+    profit_threshold = item_summary["Total Profit"].quantile(0.25)
+
+    problem_items = item_summary[
+        (item_summary["Qty Sold"] >= qty_threshold) & 
+        (item_summary["Total Profit"] <= profit_threshold)
+    ].sort_values("Qty Sold", ascending=False)
+
+    st.subheader("⚠️ Items with High Quantity Sold but Low Profit")
+    if not problem_items.empty:
+        fig_problem = px.bar(
+            problem_items.head(30),
+            x="Qty Sold",
+            y="Items",
+            orientation="h",
+            text="Qty Sold",
+            color="Total Profit",
+            color_continuous_scale="Reds",
+            title="High Sales, Low Profit Items",
+            hover_data={
+                "Item Code": True,
+                "Qty Sold": ":,.0f",
+                "Total Sales": ":,.0f",
+                "Total Profit": ":,.0f",
+                "GP%": ":.2f"
+            }
+        )
+        fig_problem.update_traces(texttemplate='%{text:,.0f}', textposition="outside")
+        fig_problem.update_layout(
+            height=900,
+            yaxis=dict(autorange="reversed"),
+            margin=dict(l=10, r=10, t=40, b=10),
+            coloraxis_showscale=False
+        )
+        st.plotly_chart(fig_problem, use_container_width=True)
+
+        st.markdown("#### 📄 Dataset")
+        st.dataframe(problem_items[["Item Code", "Items", "Qty Sold", "Total Sales", "Total Profit", "GP%"]])
+
+        st.markdown("#### 🔎 Insights")
+        st.write(f"- Found **{len(problem_items)} items** with high sales but weak profit.")
+        st.write(f"- Example: **{problem_items.iloc[0]['Items']}** sold **{problem_items.iloc[0]['Qty Sold']:,.0f} units** but only made profit of **{problem_items.iloc[0]['Total Profit']:,.0f}** (GP: {problem_items.iloc[0]['GP%']:.2f}%).")
+    else:
+        st.info("✅ No items found where sales are high but profit is low based on thresholds.")
+
+st.markdown("---")
 
 # --- Download Option ---
-csv = df[detailed_cols].to_csv(index=False).encode('utf-8')
-st.download_button("📥 Download Full Dead Stock Data", csv, "dead_stock_full.csv", "text/csv")
+st.subheader("📥 Download Detailed Report")
+with pd.ExcelWriter("Top_Items_Report.xlsx") as writer:
+    top_qty.to_excel(writer, sheet_name="Top Qty Sold", index=False)
+    top_sales.to_excel(writer, sheet_name="Top Sales", index=False)
+    top_profit.to_excel(writer, sheet_name="Top Profit", index=False)
+    problem_items.to_excel(writer, sheet_name="High Sales Low Profit", index=False)
+
+with open("Top_Items_Report.xlsx", "rb") as f:
+    st.download_button("⬇️ Download Excel Report", f, file_name="Top_Items_Report.xlsx")
